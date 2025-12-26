@@ -90,7 +90,7 @@ export const useAnswerStore = defineStore('answers', {
           status: 'error',
           content: '',
           timestamp: null,
-          error: 'API密钥未配置'
+          error: `${provider} API密钥未配置`
         }
         return
       }
@@ -134,11 +134,37 @@ export const useAnswerStore = defineStore('answers', {
       } catch (error) {
         console.error(`Error calling ${provider} API:`, error)
         
+        let errorMessage = `${provider} API调用失败`
+        
+        // 添加更详细的错误信息
+        if (error.response) {
+          if (error.response.status === 401) {
+            errorMessage = `${provider} API密钥验证失败，请检查API密钥是否正确`
+          } else if (error.response.status === 403) {
+            errorMessage = `${provider} API权限不足`
+          } else if (error.response.status === 429) {
+            errorMessage = `${provider} API请求频率过高，请稍后重试`
+          } else if (error.response.status >= 500) {
+            errorMessage = `${provider} API服务器错误`
+          }
+          
+          // 添加API返回的具体错误信息
+          if (error.response.data?.error?.message) {
+            errorMessage += `: ${error.response.data.error.message}`
+          } else if (error.response.data?.message) {
+            errorMessage += `: ${error.response.data.message}`
+          }
+        } else if (error.request) {
+          errorMessage = `${provider} API无响应，请检查网络连接或API服务状态`
+        } else {
+          errorMessage = `${provider} API调用错误: ${error.message}`
+        }
+        
         this.answers[provider] = {
           status: 'error',
           content: '',
           timestamp: null,
-          error: error.message || 'API调用失败'
+          error: errorMessage
         }
       }
     },
@@ -222,9 +248,9 @@ export const useAnswerStore = defineStore('answers', {
     // 豆包API调用
     async callDoubaoApi(apiKey, question) {
       try {
-        // 真实豆包API调用
+        // 更新豆包API端点
         const response = await axios({
-          url: 'https://api.doubao.com/v1/chat/completions',
+          url: 'https://ark.cn-beijing.volces.com/api/v3/chat/completions',
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${apiKey}`,
@@ -318,7 +344,8 @@ export const useAnswerStore = defineStore('answers', {
           }
         })
         
-        return `**答案：** ${response.data.output.text}`
+        // 更新通义千问API响应解析
+        return `**答案：** ${response.data.output.text[0]}`
       } catch (error) {
         console.error('通义千问API调用错误:', error)
         throw new Error(`通义千问API调用失败: ${error.response?.data?.error?.message || error.message}`)
