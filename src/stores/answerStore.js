@@ -84,17 +84,6 @@ export const useAnswerStore = defineStore('answers', {
       const apiConfigStore = useApiConfigStore()
       const apiKey = apiConfigStore.config[`${provider}ApiKey`]
       
-      // 检查API密钥
-      if (!apiKey) {
-        this.answers[provider] = {
-          status: 'error',
-          content: '',
-          timestamp: null,
-          error: `${provider} API密钥未配置`
-        }
-        return
-      }
-      
       // 设置为处理中状态
       this.answers[provider] = {
         status: 'processing',
@@ -106,23 +95,37 @@ export const useAnswerStore = defineStore('answers', {
       try {
         let response
         
+        // 检查API密钥
+        if (!apiKey) {
+          throw new Error(`${provider} API密钥未配置`)
+        }
+        
+        // 记录API调用开始
+        console.log(`开始调用${provider} API...`)
+        
         // 根据不同的AI服务调用相应的API
         switch (provider) {
           case 'doubao':
+            console.log(`调用豆包API，URL: https://ark.cn-beijing.volces.com/api/v3/chat/completions`)
             response = await this.callDoubaoApi(apiKey, question)
             break
           case 'deepseek':
+            console.log(`调用DeepSeek API，URL: https://api.deepseek.com/v1/chat/completions`)
             response = await this.callDeepSeekApi(apiKey, question)
             break
           case 'tongyi':
+            console.log(`调用通义千问API，URL: https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation`)
             response = await this.callTongyiApi(apiKey, question)
             break
           case 'chatgpt':
+            console.log(`调用ChatGPT API，URL: https://api.openai.com/v1/chat/completions`)
             response = await this.callChatgptApi(apiKey, question)
             break
           default:
-            throw new Error(`Unknown provider: ${provider}`)
+            throw new Error(`未知的AI服务提供商: ${provider}`)
         }
+        
+        console.log(`${provider} API调用成功，返回结果:`, response)
         
         // 更新答案状态
         this.answers[provider] = {
@@ -132,12 +135,18 @@ export const useAnswerStore = defineStore('answers', {
           error: null
         }
       } catch (error) {
-        console.error(`Error calling ${provider} API:`, error)
+        console.error(`${provider} API调用失败详细信息:`, error)
         
         let errorMessage = `${provider} API调用失败`
+        let errorStep = ''
         
-        // 添加更详细的错误信息
-        if (error.response) {
+        // 记录调用步骤
+        if (error.message.includes('API密钥未配置')) {
+          errorStep = '配置检查阶段'
+          errorMessage = error.message
+        } else if (error.response) {
+          errorStep = 'API响应阶段'
+          
           if (error.response.status === 401) {
             errorMessage = `${provider} API密钥验证失败，请检查API密钥是否正确`
           } else if (error.response.status === 403) {
@@ -146,6 +155,8 @@ export const useAnswerStore = defineStore('answers', {
             errorMessage = `${provider} API请求频率过高，请稍后重试`
           } else if (error.response.status >= 500) {
             errorMessage = `${provider} API服务器错误`
+          } else {
+            errorMessage = `${provider} API返回错误状态码: ${error.response.status}`
           }
           
           // 添加API返回的具体错误信息
@@ -153,18 +164,26 @@ export const useAnswerStore = defineStore('answers', {
             errorMessage += `: ${error.response.data.error.message}`
           } else if (error.response.data?.message) {
             errorMessage += `: ${error.response.data.message}`
+          } else {
+            errorMessage += `: ${JSON.stringify(error.response.data)}`
           }
         } else if (error.request) {
+          errorStep = 'API请求阶段'
           errorMessage = `${provider} API无响应，请检查网络连接或API服务状态`
         } else {
+          errorStep = '请求构建阶段'
           errorMessage = `${provider} API调用错误: ${error.message}`
         }
         
+        // 添加失败步骤信息
+        const detailedErrorMessage = `${errorMessage} (失败阶段: ${errorStep})`
+        
+        // 更新答案状态为错误
         this.answers[provider] = {
           status: 'error',
           content: '',
-          timestamp: null,
-          error: errorMessage
+          timestamp: Date.now(),
+          error: detailedErrorMessage
         }
       }
     },
@@ -316,9 +335,35 @@ export const useAnswerStore = defineStore('answers', {
     // 通义千问API调用
     async callTongyiApi(apiKey, question) {
       try {
+        console.log('开始构建通义千问API请求...')
+        console.log('URL:', 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation')
+        console.log('Headers:', {
+          'Authorization': 'Bearer [REDACTED]',
+          'Content-Type': 'application/json'
+        })
+        console.log('Request Body:', {
+          model: 'qwen-plus',
+          input: {
+            messages: [
+              {
+                role: 'system',
+                content: '你是一名专业的生物竞赛辅导老师，请直接输出答案，并附带200字左右的详细解析。'
+              },
+              {
+                role: 'user',
+                content: question
+              }
+            ]
+          },
+          parameters: {
+            temperature: 0.3
+          }
+        })
+        
         // 真实通义千问API调用
+        console.log('发起通义千问API请求...')
         const response = await axios({
-          url: 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation',
+          url: '/api/tongyi',
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${apiKey}`,
@@ -344,11 +389,42 @@ export const useAnswerStore = defineStore('answers', {
           }
         })
         
+        console.log('通义千问API请求成功，响应数据:', response.data)
+        
         // 更新通义千问API响应解析
-        return `**答案：** ${response.data.output.text[0]}`
+        let answerContent = ''
+        if (response.data.output?.text) {
+          answerContent = response.data.output.text
+        } else if (response.data.output?.choices?.[0]?.message?.content) {
+          answerContent = response.data.output.choices[0].message.content
+        } else {
+          answerContent = JSON.stringify(response.data.output)
+        }
+        
+        return `**答案：** ${answerContent}`
       } catch (error) {
-        console.error('通义千问API调用错误:', error)
-        throw new Error(`通义千问API调用失败: ${error.response?.data?.error?.message || error.message}`)
+        console.error('通义千问API调用错误详情:', {
+          message: error.message,
+          name: error.name,
+          stack: error.stack,
+          response: error.response,
+          request: error.request,
+          config: error.config
+        })
+        
+        let detailedError = ''
+        if (error.response) {
+          // 服务器返回了错误状态码
+          detailedError = `服务器返回错误: ${error.response.status} - ${JSON.stringify(error.response.data)}`
+        } else if (error.request) {
+          // 请求已发送但没有收到响应
+          detailedError = `没有收到服务器响应，请检查网络连接或API服务状态`
+        } else {
+          // 请求配置有误
+          detailedError = `请求配置错误: ${error.message}`
+        }
+        
+        throw new Error(`通义千问API调用失败: ${detailedError}`)
       }
     },
 
